@@ -2,9 +2,11 @@ from bs4 import BeautifulSoup
 from bs4.element import Tag
 import requests
 import time
-from typing import Optional
+from typing import Optional, List, Dict
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait, Select
+from selenium.webdriver.support import expected_conditions as EC
 import chromedriver_binary
 
 
@@ -71,7 +73,7 @@ def parse_skillbox_site_example():
         raise ValueError(f'Status code is: {skill_html.status_code}')
 
 
-def parse_avto_ru_copied_fetch_case():
+def parse_auto_ru_copied_fetch_case():
     """ Copy AJAX request from browser web tool and use it for getting and parsing some custom data """
     def fetch(url, params):
         headers = params['headers']
@@ -128,7 +130,64 @@ def use_selenium_on_hh_site():
     browser.close()
 
 
-def use_selenium_on_avto_ru_site():
+def wait_updating_load_field(browser: webdriver.Chrome) -> None:
+    # click on the button for getting result does not update full page
+    # so we have to wait only part of the page.
+    elem = browser.find_element(By.CSS_SELECTOR, '.ListingCars__loaderOverlay')
+    WebDriverWait(browser, 10).until(EC.visibility_of(elem))
+    # without implicitly_wait we still have a chance to get old data
+    browser.implicitly_wait(10)
+    WebDriverWait(browser, 10).until(EC.invisibility_of_element(elem))
+    browser.implicitly_wait(10)
+
+
+def collect_prices(browser: webdriver.Chrome, prices: List[Dict]) -> None:
+    offers = browser.find_elements(By.CSS_SELECTOR, 'div[class="ListingItem__main"]')
+    for offer in offers:
+        try:
+            title = offer.find_element(By.CSS_SELECTOR, 'a[class="Link ListingItemTitle__link"]').text
+            price = offer.find_element(By.CSS_SELECTOR, 'div[class="ListingItemPrice__content').text
+            prices.append({
+                'title': title,
+                'price': price,
+                'int_price': int(price[:-1].replace(' ', '')),
+            })
+            print(f'Автомобиль: {title}. Цена: {price}')
+        except Exception as ex:
+            print(f'It happens: {ex}')
+
+
+def collect_prices_from_pages(
+        browser: webdriver.Chrome, start_page: int = 1, end_page: Optional[int] = None) -> List[Dict]:
+    prices = []
+    # get data about all pages with results.
+    # it will be used for further iteration
+    group_buttons_with_pages = browser.find_element(
+        By.CSS_SELECTOR,
+        'span[class="ControlGroup ControlGroup_responsive_no ControlGroup_size_s ListingPagination__pages"]')
+    buttons_with_pages = group_buttons_with_pages.find_elements(By.CSS_SELECTOR, '.Button__text')
+    last_page_count = int(buttons_with_pages[-1].text)
+    if end_page and end_page <= last_page_count:
+        last_page_count = end_page
+    for i in range(start_page, last_page_count + 1):
+        print(f'Получаем данные со страницы №{i}')
+        # go to the next page
+        group_buttons_with_pages.find_element(By.XPATH, f'//span[text()="{i}"]').click()
+        # collect data on new page
+        if start_page != 1:
+            wait_updating_load_field(browser)
+        collect_prices(browser, prices)
+
+    return prices
+
+
+def show_the_cheapest(prices):
+    min_price = min(prices, key=lambda p: p['int_price'])['int_price']
+    for price in filter(lambda a: a['int_price'] == min_price, prices):
+        print(f"Самый дешевый автомобиль: {price['title']} по цене: {price['price']}")
+
+
+def use_selenium_on_auto_ru_site():
     """
     Homework #2:  Напишите код парсера используя Selenium:
     - Зайдите на сайт auto.ru
@@ -140,13 +199,40 @@ def use_selenium_on_avto_ru_site():
     Бонусное сложное задание:
     Выведите модель самого дешевого автомобиля
     """
-    pass
+    browser = webdriver.Chrome()
+    browser.maximize_window()
+    site_url = 'http://auto.ru'
+    browser.get(site_url)
+
+    lada_button = browser.find_element(By.XPATH, "//a[@title='LADA (ВАЗ)']")
+    lada_button.click()
+
+    # as an alternative: browser.find_elements(By.XPATH, "//*[text()='Продажа автомобилей']")
+    WebDriverWait(browser, 20).until(EC.visibility_of_element_located((By.LINK_TEXT, "Продажа автомобилей")))
+    credit_checkbox = browser.find_element(By.NAME, "on_credit")
+    credit_checkbox.click()
+
+    show_offers_button = browser.find_element(By.CSS_SELECTOR, 'span[class=ButtonWithLoader__content]')
+    show_offers_button.click()
+
+    # Find the cheapest auto by using filters on the site.
+    # if several cars have the same price - show them all
+    filter_button = browser.find_element(By.XPATH, '//span[text()="Сортировка"]')
+    filter_button.click()
+    option = browser.find_element(By.XPATH, '//*[@class="MenuItem MenuItem_size_m"][text()="По возрастанию цены"]')
+    option.click()
+
+    wait_updating_load_field(browser)
+    prices = collect_prices_from_pages(browser, 1, 1)
+
+    print('Определяем самые дешевые автомобили')
+    show_the_cheapest(prices)
 
 
 if __name__ == "__main__":
     # parse_downloaded_json()
     # parse_downloaded_html()
     # parse_skillbox_site_example()
-    # parse_avto_ru_copied_fetch_case()
+    # parse_auto_ru_copied_fetch_case()
     # use_selenium_on_hh_site()
-    use_selenium_on_avto_ru_site()
+    use_selenium_on_auto_ru_site()
